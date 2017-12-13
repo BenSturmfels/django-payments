@@ -180,6 +180,26 @@ class PaypalProvider(BasicProvider):
         tax = payment.tax.quantize(CENTS, rounding=ROUND_HALF_UP)
         delivery = payment.delivery.quantize(
             CENTS, rounding=ROUND_HALF_UP)
+        # Pre-fill the PayPal billing address so the customer doesn't have to
+        # type it in again. Although the PayPal API calls this
+        # "shipping_address", the PayPal payment form labels it as "Billing
+        # address", hence we're passing the billing address.
+        #
+        # See: https://developer.paypal.com/docs/api/payments/v1/#definition-item_list
+        addr = payment.order.billing_address
+        billing_address = {
+            'recipient_name': ' '.join([addr.first_name, addr.last_name]),
+            'line1': addr.street_address_1,
+            'line2': addr.street_address_2,
+            'city': addr.city,
+            'state': addr.country_area,
+            'postal_code': addr.postal_code,
+            'country_code': addr.country.code,
+        }
+        if str(addr.phone):
+            # PayPal will return "HTTP/1.1 400 Bad Request" if you send a blank
+            # phone number.
+            billing_address['phone'] = str(addr.phone)
         data = {
             'intent': 'sale' if self._capture else 'authorize',
             'transactions': [{'amount': {
@@ -189,7 +209,10 @@ class PaypalProvider(BasicProvider):
                     'subtotal': str(sub_total),
                     'tax': str(tax),
                     'shipping': str(delivery)}},
-                'item_list': {'items': items},
+                'item_list': {
+                    'items': items,
+                    'shipping_address': billing_address, # See comment above.
+                },
                 'description': payment.description}]}
         return data
 
@@ -198,7 +221,12 @@ class PaypalProvider(BasicProvider):
         data = self.get_transactions_data(payment)
         data['redirect_urls'] = {'return_url': return_url,
                                  'cancel_url': return_url}
-        data['payer'] = {'payment_method': 'paypal'}
+        data['payer'] = {
+            'payment_method': 'paypal',
+            'payer_info': {
+                'email': payment.billing_email,
+            },
+        }
         return data
 
     def get_form(self, payment, data=None):
